@@ -25,7 +25,8 @@
     opacity: 1;
 }
 
-.mermaid-zoom-controls button {
+.mermaid-zoom-controls button,
+.mermaid-zoom-controls a {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -36,13 +37,17 @@
     border: none;
     border-radius: 4px;
     cursor: pointer;
+    text-decoration: none;
+    padding: 0;
 }
 
-.mermaid-zoom-controls button:hover {
+.mermaid-zoom-controls button:hover,
+.mermaid-zoom-controls a:hover {
     background: var(--vscode-toolbar-hoverBackground);
 }
 
-.mermaid-zoom-controls button.active {
+.mermaid-zoom-controls button.active,
+.mermaid-zoom-controls a.active {
     background: var(--vscode-toolbar-activeBackground);
     color: var(--vscode-focusBorder);
 }
@@ -96,4 +101,50 @@
 .mermaid-resize-handle:hover::after {
     opacity: 1;
     transition-delay: 0.3s;
+}
+
+/* Fullscreen mode — Fullscreen API (fills entire VS Code window) */
+.mermaid-wrapper:fullscreen {
+    width: 100vw;
+    height: 100vh;
+    max-height: none;
+    background: var(--vscode-editor-background);
+    border: none;
+    border-radius: 0;
+    margin: 0;
+}
+
+.mermaid-wrapper:fullscreen .mermaid-zoom-controls-auto-hide {
+    opacity: 1;
+}
+
+/* Fullscreen mode — CSS fallback when Fullscreen API is unavailable (fills markdown preview pane) */
+.mermaid-wrapper.mermaid-fullscreen:not(:fullscreen) {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh !important;
+    max-height: none !important;
+    z-index: 10000;
+    background: var(--vscode-editor-background);
+    border: none;
+    border-radius: 0;
+    margin: 0;
+}
+
+.mermaid-wrapper.mermaid-fullscreen:not(:fullscreen):hover,
+.mermaid-wrapper.mermaid-fullscreen:not(:fullscreen):focus,
+.mermaid-wrapper.mermaid-fullscreen:not(:fullscreen):focus-within {
+    border: none;
+}
+
+.mermaid-wrapper.mermaid-fullscreen:not(:fullscreen) .mermaid-zoom-controls {
+    top: 8px;
+    right: 8px;
+    z-index: 10001;
+}
+
+.mermaid-wrapper.mermaid-fullscreen:not(:fullscreen) .mermaid-zoom-controls-auto-hide {
+    opacity: 1;
 }

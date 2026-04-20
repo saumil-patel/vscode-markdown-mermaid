@@ -141,6 +141,8 @@ export class DiagramElement {
     private customHeight: number | undefined;
 
     private panModeButton: HTMLButtonElement | null = null;
+    private fullscreenButton: HTMLButtonElement | null = null;
+    private isFullscreen = false;
     private readonly resizeHandle: HTMLElement | null = null;
     private readonly resizeObserver: ResizeObserver;
 
@@ -221,6 +223,9 @@ export class DiagramElement {
     }
 
     public dispose(): void {
+        if (this.isFullscreen) {
+            this.exitFullscreen();
+        }
         this.abortController.abort();
         this.resizeObserver.disconnect();
     }
@@ -239,6 +244,16 @@ export class DiagramElement {
         this.container.addEventListener('mouseenter', e => this.updateCursor(e), { signal });
         window.addEventListener('keydown', e => this.handleKeyChange(e), { signal });
         window.addEventListener('keyup', e => this.handleKeyChange(e), { signal });
+
+        // Sync state when the browser exits fullscreen (e.g. user presses ESC)
+        document.addEventListener('fullscreenchange', () => {
+            if (!document.fullscreenElement && this.isFullscreen) {
+                this.isFullscreen = false;
+                this.container.classList.remove('mermaid-fullscreen');
+                this.updateFullscreenButton();
+                this.relayoutAfterFullscreenChange();
+            }
+        }, { signal });
     }
 
     private createZoomControls(): void {
@@ -254,7 +269,26 @@ export class DiagramElement {
             <button class="zoom-out-btn" title="Zoom Out"><span class="codicon codicon-zoom-out"></span></button>
             <button class="zoom-in-btn" title="Zoom In"><span class="codicon codicon-zoom-in"></span></button>
             <button class="zoom-reset-btn" title="Reset Zoom"><span class="codicon codicon-screen-normal"></span></button>
+            <button class="fullscreen-btn" title="Toggle Fullscreen"><span class="codicon codicon-screen-full"></span></button>
+            <a class="text-view-btn" href="command:markdown.showSource" title="Show Source"><span class="codicon codicon-file-code"></span></a>
         `;
+
+        // Prevent double-click from bubbling to VS Code's markdown preview
+        // (which opens source file on dblclick)
+        controls.addEventListener('mousedown', e => {
+            // Allow default for command URI links (text-view-btn)
+            const target = e.target as HTMLElement;
+            if (target.closest('a[href^="command:"]')) {
+                e.stopPropagation();
+                return;
+            }
+            e.preventDefault();
+            e.stopPropagation();
+        }, { signal });
+        controls.addEventListener('dblclick', e => {
+            e.preventDefault();
+            e.stopPropagation();
+        }, { signal });
 
         this.panModeButton = controls.querySelector('.pan-mode-btn');
         this.panModeButton?.addEventListener('click', e => {
@@ -276,6 +310,13 @@ export class DiagramElement {
             e.preventDefault();
             e.stopPropagation();
             this.reset();
+        }, { signal });
+
+        this.fullscreenButton = controls.querySelector('.fullscreen-btn');
+        this.fullscreenButton?.addEventListener('click', e => {
+            e.preventDefault();
+            e.stopPropagation();
+            this.toggleFullscreen();
         }, { signal });
 
         this.container.appendChild(controls);
@@ -325,6 +366,62 @@ export class DiagramElement {
         this.panModeEnabled = !this.panModeEnabled;
         this.panModeButton?.classList.toggle('active', this.panModeEnabled);
         this.setCursor(false, false);
+    }
+
+    private toggleFullscreen(): void {
+        if (!this.isFullscreen) {
+            this.enterFullscreen();
+        } else {
+            this.exitFullscreen();
+        }
+    }
+
+    private enterFullscreen(): void {
+        this.isFullscreen = true;
+        this.container.classList.add('mermaid-fullscreen');
+        this.updateFullscreenButton();
+
+        // Try the Fullscreen API to escape the webview iframe bounds
+        if (this.container.requestFullscreen) {
+            this.container.requestFullscreen().catch(() => {
+                // Fullscreen API not available (sandboxed iframe) — CSS fallback is already active
+            });
+        }
+
+        this.relayoutAfterFullscreenChange();
+    }
+
+    private exitFullscreen(): void {
+        this.isFullscreen = false;
+        this.container.classList.remove('mermaid-fullscreen');
+        this.updateFullscreenButton();
+
+        if (document.fullscreenElement) {
+            document.exitFullscreen().catch(() => { });
+        }
+
+        this.relayoutAfterFullscreenChange();
+    }
+
+    private updateFullscreenButton(): void {
+        this.fullscreenButton?.classList.toggle('active', this.isFullscreen);
+        const icon = this.fullscreenButton?.querySelector('span');
+        if (icon) {
+            icon.className = this.isFullscreen
+                ? 'codicon codicon-screen-normal'
+                : 'codicon codicon-screen-full';
+        }
+        this.fullscreenButton?.setAttribute('title', this.isFullscreen ? 'Exit Fullscreen' : 'Toggle Fullscreen');
+    }
+
+    private relayoutAfterFullscreenChange(): void {
+        requestAnimationFrame(() => {
+            if (!this.hasInteracted || !this.isFullscreen) {
+                this.centerContent();
+            } else {
+                this.handleResize();
+            }
+        });
     }
 
     private handleKeyChange(e: KeyboardEvent): void {
@@ -391,10 +488,12 @@ export class DiagramElement {
             const mouseX = e.clientX - rect.left;
             const mouseY = e.clientY - rect.top;
 
-            // Pinch gestures report smaller deltaY values than scroll wheel,
-            // so we apply a multiplier to make them feel equally sensitive
+            // Trackpad pinch gestures report ctrlKey with very small deltaY (1-10).
+            // Regular mouse Ctrl+Wheel has large deltaY (100+).
+            // Clamp the raw delta to prevent overshooting on mouse scroll.
             const pinchMultiplier = isPinchZoom ? 10 : 1;
-            const delta = -e.deltaY * zoomFactor * pinchMultiplier;
+            const rawDelta = -e.deltaY * zoomFactor * pinchMultiplier;
+            const delta = Math.max(-0.5, Math.min(0.5, rawDelta));
             const newScale = Math.min(maxScale, Math.max(minScale, this.scale * (1 + delta)));
 
             const scaleFactor = newScale / this.scale;
@@ -552,13 +651,50 @@ export class DiagramElement {
     }
 
     public zoomIn(): void {
-        const rect = this.container.getBoundingClientRect();
-        this.zoomAtPoint(1.25, rect.width / 2, rect.height / 2);
+        const center = this.getVisibleContentCenter();
+        this.zoomAtPoint(1.25, center.x, center.y);
     }
 
     public zoomOut(): void {
-        const rect = this.container.getBoundingClientRect();
-        this.zoomAtPoint(0.8, rect.width / 2, rect.height / 2);
+        const center = this.getVisibleContentCenter();
+        this.zoomAtPoint(0.8, center.x, center.y);
+    }
+
+    /**
+     * Returns the center of the visible SVG content in container-local coordinates.
+     * This is the intersection of the scaled SVG bounds with the container viewport.
+     * Falls back to container center if the SVG is not available.
+     */
+    private getVisibleContentCenter(): Point {
+        const containerRect = this.container.getBoundingClientRect();
+        const cx = containerRect.width / 2;
+        const cy = containerRect.height / 2;
+
+        if (this.lastSvgSize.width === 0 || this.lastSvgSize.height === 0) {
+            return { x: cx, y: cy };
+        }
+
+        // SVG bounds in container-local coordinates
+        const svgLeft = this.translate.x;
+        const svgTop = this.translate.y;
+        const svgRight = this.translate.x + this.lastSvgSize.width * this.scale;
+        const svgBottom = this.translate.y + this.lastSvgSize.height * this.scale;
+
+        // Intersect with viewport (0,0)-(containerWidth, containerHeight)
+        const visLeft = Math.max(0, svgLeft);
+        const visTop = Math.max(0, svgTop);
+        const visRight = Math.min(containerRect.width, svgRight);
+        const visBottom = Math.min(containerRect.height, svgBottom);
+
+        // If SVG is completely outside viewport, fall back to container center
+        if (visLeft >= visRight || visTop >= visBottom) {
+            return { x: cx, y: cy };
+        }
+
+        return {
+            x: (visLeft + visRight) / 2,
+            y: (visTop + visBottom) / 2,
+        };
     }
 
     private zoomAtPoint(factor: number, x: number, y: number): void {
